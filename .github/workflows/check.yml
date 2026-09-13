@@ -10,13 +10,11 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      - name: Repository herunterladen
+        uses: actions/checkout@v5
 
-    - name: Repository herunterladen
-      uses: actions/checkout@v5
-
-    - name: Python einrichten
-      uses: actions/setup-python@v6
-
+      - name: Python einrichten
+        uses: actions/setup-python@v6
         with:
           python-version: "3.x"
 
