@@ -2,7 +2,7 @@ name: Hot Wheels Bestandscheck
 
 on:
   schedule:
-    - cron: "*/15 * * * *"
+    - cron: "*/90 * * * *"
   workflow_dispatch:
 
 jobs:
