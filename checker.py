@@ -2,7 +2,6 @@ import os
 import requests
 
 URL = "https://diecasthunter.de/products/hot-wheels-2026-team-transport-porsche-rexy-911-gt3-r-992-fleet-flyer-1-64"
-# URL = "https://diecasthunter.de/products/hot-wheels-boulevard-155-2021-toyota-gr-supra-1-64"
 
 BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
@@ -36,6 +35,25 @@ def write_file(filename, content):
         f.write(content)
 
 
+def check_stock():
+    response = requests.get(
+        URL + ".js",
+        headers={"User-Agent": "Mozilla/5.0"},
+        timeout=20
+    )
+
+    response.raise_for_status()
+
+    product = response.json()
+
+    in_stock = any(
+        variant.get("available", False)
+        for variant in product["variants"]
+    )
+
+    return in_stock, product
+
+
 # --------------------------------------------------
 # Telegram-Befehle abholen
 # --------------------------------------------------
@@ -61,16 +79,19 @@ status = read_file(STATUS_FILE, "active")
 for update in updates:
     update_id = update["update_id"]
 
-    # Offset auf nächsten Update setzen
     offset = update_id + 1
 
     message = update.get("message", {})
     chat = message.get("chat", {})
     text = message.get("text", "").strip()
 
-    # Nur Befehle von DEINEM Chat akzeptieren
+    # Nur deinen eigenen Telegram-Chat akzeptieren
     if str(chat.get("id")) != str(CHAT_ID):
         continue
+
+    # --------------------------------------------------
+    # /pause
+    # --------------------------------------------------
 
     if text == "/pause":
         status = "paused"
@@ -81,6 +102,10 @@ for update in updates:
             "Mit /start kannst du ihn wieder aktivieren."
         )
 
+    # --------------------------------------------------
+    # /start
+    # --------------------------------------------------
+
     elif text == "/start":
         status = "active"
         write_file(STATUS_FILE, status)
@@ -89,26 +114,37 @@ for update in updates:
             "▶️ Bestandscheck wieder aktiviert."
         )
 
+    # --------------------------------------------------
+    # /status – LIVE-Abfrage
+    # --------------------------------------------------
+
     elif text == "/status":
-        stock = read_file(STOCK_FILE, "unknown")
 
-        if status == "paused":
-            status_text = "⏸️ pausiert"
-        else:
-            status_text = "▶️ aktiv"
+        try:
+            in_stock, product = check_stock()
 
-        if stock == "in":
-            stock_text = "🟢 verfügbar"
-        elif stock == "out":
-            stock_text = "🔴 nicht verfügbar"
-        else:
-            stock_text = "⚪ noch unbekannt"
+            if in_stock:
+                stock_text = "🟢 VERFÜGBAR"
+            else:
+                stock_text = "🔴 NICHT VERFÜGBAR"
 
-        send_telegram(
-            f"ℹ️ Status\n\n"
-            f"Bestandscheck: {status_text}\n"
-            f"Artikel: {stock_text}"
-        )
+            if status == "paused":
+                status_text = "⏸️ pausiert"
+            else:
+                status_text = "▶️ aktiv"
+
+            send_telegram(
+                f"ℹ️ LIVE-STATUS\n\n"
+                f"Bestandscheck: {status_text}\n"
+                f"Artikel: {stock_text}\n\n"
+                f"{product['title']}"
+            )
+
+        except Exception as e:
+            send_telegram(
+                "⚠️ Live-Status konnte gerade nicht abgefragt werden.\n\n"
+                f"Fehler: {e}"
+            )
 
 
 # Offset speichern
@@ -116,7 +152,7 @@ write_file(OFFSET_FILE, str(offset))
 
 
 # --------------------------------------------------
-# Prüfen, ob der Bestandscheck pausiert ist
+# Bei Pause keinen normalen Bestandscheck durchführen
 # --------------------------------------------------
 
 if status == "paused":
@@ -125,28 +161,10 @@ if status == "paused":
 
 
 # --------------------------------------------------
-# Produkt prüfen
+# Normalen Bestandscheck durchführen
 # --------------------------------------------------
 
-response = requests.get(
-    URL + ".js",
-    headers={"User-Agent": "Mozilla/5.0"},
-    timeout=20
-)
-
-response.raise_for_status()
-
-product = response.json()
-
-in_stock = any(
-    variant.get("available", False)
-    for variant in product["variants"]
-)
-
-
-# --------------------------------------------------
-# Alten Bestand auslesen
-# --------------------------------------------------
+in_stock, product = check_stock()
 
 old_stock = read_file(STOCK_FILE, "unknown")
 
@@ -159,6 +177,7 @@ if in_stock:
     new_stock = "in"
 
     if old_stock == "out":
+
         message = (
             "🚨 HOT WHEELS ALARM! 🚨\n\n"
             f"{product['title']}\n\n"
@@ -168,13 +187,17 @@ if in_stock:
 
         send_telegram(message)
 
-        print("Artikel wieder verfügbar – Telegram-Nachricht gesendet!")
+        print(
+            "Artikel wieder verfügbar – "
+            "Telegram-Nachricht gesendet!"
+        )
 
     else:
         print("Artikel verfügbar, aber kein neuer Restock.")
 
 else:
     new_stock = "out"
+
     print("Noch nicht verfügbar.")
 
 
