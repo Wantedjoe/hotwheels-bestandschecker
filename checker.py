@@ -20,7 +20,7 @@ page = response.text.lower()
 
 # Solange dieser Begriff auf der Seite steht,
 # gehen wir davon aus, dass der Artikel verfügbar ist.
-in_stock = ("In den Warenkorb legen" in page)
+in_stock = ("in den warenkorb legen" in page)
 
 if in_stock:
     message = (
