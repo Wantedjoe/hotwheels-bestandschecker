@@ -20,9 +20,8 @@ page = response.text.lower()
 
 # Solange diese Begriffe auf der Seite stehen,
 # gehen wir davon aus, dass der Artikel noch nicht verfügbar ist.
-out_of_stock = (
-    "nicht vorrätig" in page
-    or "ausverkauft" in page
+out_of_stock != (
+    "In den Warenkorb legen" in page
 )
 
 if not out_of_stock:
