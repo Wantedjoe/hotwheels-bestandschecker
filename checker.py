@@ -19,10 +19,10 @@ response.raise_for_status()
 page = response.text.lower()
 
 # Solange diese Begriffe auf der Seite stehen,
-# gehen wir davon aus, dass der Artikel noch nicht verfügbar ist.
-out_of_stock != ("In den Warenkorb legen" in page)
+# gehen wir davon aus, dass der Artikel verfügbar ist.
+in_of_stock = ("In den Warenkorb legen" in page)
 
-if not out_of_stock:
+if in_of_stock:
     message = (
         "🚨 HOT WHEELS VERFÜGBAR! 🚨\n\n"
         "Hot Wheels Boulevard #156 Enzo Ferrari | 1:64\n\n"
