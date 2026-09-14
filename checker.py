@@ -24,8 +24,8 @@ in_stock = ("in den warenkorb legen" in page)
 
 if in_stock:
     message = (
-        "🚨 HOT WHEELS VERFÜGBAR! 🚨\n\n"
-        "Hot Wheels Boulevard #156 Enzo Ferrari | 1:64\n\n"
+        "🚨 HOT WHEELS ALARM! 🚨\n\n"
+        "Hot Wheels Boulevard\n\n"
         "💰 Jetzt prüfen und kaufen:\n"
         f"{URL}"
     )
