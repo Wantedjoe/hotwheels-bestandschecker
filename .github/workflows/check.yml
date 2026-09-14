@@ -24,6 +24,12 @@ jobs:
       - name: Abhängigkeiten installieren
         run: pip install requests
 
+      - name: Statusdateien vorbereiten
+        run: |
+          [ -f status.txt ] || echo "active" > status.txt
+          [ -f stock.txt ] || echo "unknown" > stock.txt
+          [ -f telegram_offset.txt ] || echo "0" > telegram_offset.txt
+
       - name: Bestandsprüfung
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
