@@ -1,8 +1,9 @@
 import os
 import requests
 
-URL = "https://diecasthunter.de/products/hot-wheels-factory-set-2026-1-4-inkl-hot-wheels-datsun-510-gasser-chase-1-64"
-# URL = https://diecasthunter.de/products/hot-wheels-boulevard-155-2021-toyota-gr-supra-1-64
+# URL = "https://diecasthunter.de/products/hot-wheels-factory-set-2026-1-4-inkl-hot-wheels-datsun-510-gasser-chase-1-64"
+# URL = "https://diecasthunter.de/products/hot-wheels-2026-team-transport-porsche-rexy-911-gt3-r-992-fleet-flyer-1-64?_pos=18&_sid=bc835388d&_ss=r"
+URL = "https://diecasthunter.de/products/hot-wheels-boulevard-155-2021-toyota-gr-supra-1-64"
 
 BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
