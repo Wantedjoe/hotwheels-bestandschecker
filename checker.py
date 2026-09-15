@@ -2,7 +2,7 @@ import os
 import requests
 
 # URL = "https://diecasthunter.de/products/hot-wheels-2026-team-transport-porsche-rexy-911-gt3-r-992-fleet-flyer-1-64"
-URL = https://diecasthunter.de/products/hot-wheels-boulevard-156-enzo-ferrari-1-64?_pos=1&_sid=3240206a0&_ss=r
+URL = "https://diecasthunter.de/products/hot-wheels-boulevard-156-enzo-ferrari-1-64"
 # URL = "https://diecasthunter.de/products/hot-wheels-boulevard-155-2021-toyota-gr-supra-1-64"
 # URL = "https://diecasthunter.de/products/hot-wheels-2026-pop-culture-forza-audi-90-quattro"
 
