@@ -8,6 +8,12 @@ on:
 permissions:
   contents: write
 
+# Verhindert, dass zwei Läufe gleichzeitig
+# dieselben Dateien bearbeiten.
+concurrency:
+  group: hot-wheels-check
+  cancel-in-progress: false
+
 jobs:
   check-stock:
     runs-on: ubuntu-latest
@@ -27,8 +33,9 @@ jobs:
       - name: Statusdateien vorbereiten
         run: |
           [ -f status.txt ] || echo "active" > status.txt
-          [ -f stock.txt ] || echo "unknown" > stock.txt
+          [ -f stock.txt ] || printf "unknown\nunknown\nunknown\n" > stock.txt
           [ -f telegram_offset.txt ] || echo "0" > telegram_offset.txt
+          [ -f urls.txt ] || touch urls.txt
 
       - name: Bestandsprüfung
         env:
@@ -41,8 +48,15 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          git add status.txt stock.txt telegram_offset.txt
+          git add status.txt stock.txt telegram_offset.txt urls.txt
 
-          git diff --cached --quiet || git commit -m "Update bot and stock status"
+          if git diff --cached --quiet; then
+            echo "Keine Änderungen vorhanden."
+            exit 0
+          fi
+
+          git commit -m "Update bot and stock status"
+
+          git pull --rebase origin main
 
           git push
