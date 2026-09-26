@@ -28,7 +28,7 @@ jobs:
           python-version: "3.x"
 
       - name: Abhängigkeiten installieren
-        run: pip install requests
+        run: pip install requests beautifulsoup4
 
       - name: Statusdateien vorbereiten
         run: |
