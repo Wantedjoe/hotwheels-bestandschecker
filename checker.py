@@ -1,7 +1,9 @@
 import os
+import json
 import re
 import requests
 from bs4 import BeautifulSoup
+
 
 BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
@@ -75,7 +77,7 @@ def write_urls(urls):
 
 
 # --------------------------------------------------
-# Bestandsstatus für 3 URLs
+# Bestandsstatus für 3 URLs lesen / schreiben
 # --------------------------------------------------
 
 def read_stocks():
@@ -119,7 +121,9 @@ def check_diecast_hunter(url):
 
     response = requests.get(
         url + ".js",
-        headers={"User-Agent": "Mozilla/5.0"},
+        headers={
+            "User-Agent": "Mozilla/5.0"
+        },
         timeout=20
     )
 
@@ -133,22 +137,165 @@ def check_diecast_hunter(url):
     )
 
     return in_stock, {
-        "title": product.get("title", "Unbekanntes Produkt"),
-        "price": product.get("price", 0),
+        "title": product.get(
+            "title",
+            "Unbekanntes Produkt"
+        ),
+        "price": product.get(
+            "price",
+            0
+        ),
         "url": url,
         "shop": "Diecast Hunter"
     }
 
 
 # --------------------------------------------------
-# Smyths prüfen
-#
-# WICHTIG:
-# Hier wird ausschließlich Online-Bestellbarkeit
-# berücksichtigt.
-#
-# Filialbestand / Click & Collect wird NICHT
-# als "verfügbar" gewertet.
+# Hilfsfunktion:
+# Preis aus Smyths-Daten suchen
+# --------------------------------------------------
+
+def find_smyths_price(soup):
+
+    # --------------------------------------------------
+    # 1. OpenGraph
+    # --------------------------------------------------
+
+    meta_price = soup.find(
+        "meta",
+        property="product:price:amount"
+    )
+
+    if meta_price:
+
+        value = meta_price.get("content")
+
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            pass
+
+
+    # --------------------------------------------------
+    # 2. JSON-LD
+    # --------------------------------------------------
+
+    for script in soup.find_all(
+        "script",
+        type="application/ld+json"
+    ):
+
+        try:
+
+            raw = script.string or script.get_text()
+
+            data = json.loads(raw)
+
+            candidates = []
+
+            if isinstance(data, dict):
+
+                candidates.append(data)
+
+                if "@graph" in data:
+
+                    candidates.extend(
+                        data["@graph"]
+                    )
+
+            elif isinstance(data, list):
+
+                candidates.extend(data)
+
+
+            for item in candidates:
+
+                if not isinstance(item, dict):
+                    continue
+
+                offers = item.get("offers")
+
+                if isinstance(offers, dict):
+
+                    value = offers.get(
+                        "price"
+                    )
+
+                    if value is not None:
+
+                        try:
+                            return float(value)
+                        except (
+                            TypeError,
+                            ValueError
+                        ):
+                            pass
+
+        except Exception:
+            continue
+
+
+    return None
+
+
+# --------------------------------------------------
+# Smyths Produktname
+# --------------------------------------------------
+
+def find_smyths_title(soup):
+
+    # OpenGraph
+
+    meta_title = soup.find(
+        "meta",
+        property="og:title"
+    )
+
+    if meta_title:
+
+        title = meta_title.get(
+            "content"
+        )
+
+        if title:
+            return title.strip()
+
+
+    # H1
+
+    h1 = soup.find("h1")
+
+    if h1:
+
+        title = h1.get_text(
+            " ",
+            strip=True
+        )
+
+        if title:
+            return title
+
+
+    # Title-Tag
+
+    title_tag = soup.find("title")
+
+    if title_tag:
+
+        title = title_tag.get_text(
+            " ",
+            strip=True
+        )
+
+        if title:
+            return title
+
+
+    return "Smyths Produkt"
+
+
+# --------------------------------------------------
+# Smyths Online-Bestand prüfen
 # --------------------------------------------------
 
 def check_smyths(url):
@@ -162,12 +309,19 @@ def check_smyths(url):
         ),
         "Accept": (
             "text/html,application/xhtml+xml,"
-            "application/xml;q=0.9,image/avif,"
-            "image/webp,*/*;q=0.8"
+            "application/xml;q=0.9,"
+            "image/avif,image/webp,*/*;q=0.8"
         ),
-        "Accept-Language": "de-CH,de;q=0.9,en;q=0.8",
-        "Referer": "https://www.smythstoys.com/ch/de-ch/"
+        "Accept-Language": (
+            "de-CH,de;q=0.9,en;q=0.8"
+        ),
+        "Referer": (
+            "https://www.smythstoys.com/ch/de-ch/"
+        ),
+        "Cache-Control": "no-cache",
+        "Pragma": "no-cache"
     }
+
 
     response = requests.get(
         url,
@@ -179,131 +333,264 @@ def check_smyths(url):
 
     html = response.text
 
-    soup = BeautifulSoup(html, "html.parser")
-
-    # --------------------------------------------------
-    # Produktname ermitteln
-    # --------------------------------------------------
-
-    title = None
-
-    meta_title = soup.find(
-        "meta",
-        property="og:title"
+    soup = BeautifulSoup(
+        html,
+        "html.parser"
     )
 
-    if meta_title:
-        title = meta_title.get("content")
 
-    if not title:
-        title_tag = soup.find("title")
-
-        if title_tag:
-            title = title_tag.get_text(
-                " ",
-                strip=True
-            )
-
-    if not title:
-        title = "Smyths Produkt"
-
-
-    # --------------------------------------------------
-    # Preis ermitteln
-    # --------------------------------------------------
-
-    price = None
-
-    meta_price = soup.find(
-        "meta",
-        property="product:price:amount"
+    title = find_smyths_title(
+        soup
     )
 
-    if meta_price:
-        try:
-            price = float(
-                meta_price.get("content")
+    price = find_smyths_price(
+        soup
+    )
+
+
+    # --------------------------------------------------
+    # WICHTIG:
+    #
+    # Smyths verwendet/verwaltete verschiedene
+    # Elemente für den Bestandsstatus.
+    #
+    # Wir suchen deshalb zuerst gezielt nach
+    # js-stockStatusCode.
+    # --------------------------------------------------
+
+    stock_elements = soup.find_all(
+        attrs={
+            "name": "js-stockStatusCode"
+        }
+    )
+
+
+    for element in stock_elements:
+
+        values = []
+
+        # Text
+
+        if element.get_text(
+            strip=True
+        ):
+            values.append(
+                element.get_text(
+                    " ",
+                    strip=True
+                )
             )
-        except (TypeError, ValueError):
-            pass
 
 
-    # --------------------------------------------------
-    # JSON-LD Produktdaten versuchen
-    # --------------------------------------------------
+        # value
 
-    if price is None:
+        if element.get("value"):
+            values.append(
+                element.get("value")
+            )
 
-        for script in soup.find_all(
-            "script",
-            type="application/ld+json"
+
+        # data-* Attribute
+
+        for key, value in element.attrs.items():
+
+            if key.startswith("data-"):
+
+                if isinstance(
+                    value,
+                    str
+                ):
+
+                    values.append(value)
+
+
+        combined = " ".join(
+            values
+        ).lower()
+
+
+        # Eindeutig verfügbar
+
+        if (
+            "instock" in combined
+            or "in stock" in combined
         ):
 
-            try:
-                import json
+            return True, {
+                "title": title,
+                "price": price,
+                "url": url,
+                "shop": "Smyths"
+            }
 
-                data = json.loads(
-                    script.string or
-                    script.get_text()
-                )
 
-                candidates = []
+        # Eindeutig nicht verfügbar
 
-                if isinstance(data, dict):
-                    candidates.append(data)
+        if (
+            "outofstock" in combined
+            or "out of stock" in combined
+        ):
 
-                    if "@graph" in data:
-                        candidates.extend(
-                            data["@graph"]
-                        )
+            return False, {
+                "title": title,
+                "price": price,
+                "url": url,
+                "shop": "Smyths"
+            }
 
-                elif isinstance(data, list):
-                    candidates.extend(data)
 
-                for item in candidates:
+        if (
+            "unavailable" in combined
+            or "notavailable" in combined
+        ):
 
-                    if not isinstance(item, dict):
-                        continue
-
-                    if item.get("@type") == "Product":
-
-                        if not title and item.get("name"):
-                            title = item["name"]
-
-                        offers = item.get(
-                            "offers"
-                        )
-
-                        if isinstance(
-                            offers,
-                            dict
-                        ):
-                            value = offers.get(
-                                "price"
-                            )
-
-                            if value is not None:
-                                try:
-                                    price = float(
-                                        value
-                                    )
-                                except (
-                                    TypeError,
-                                    ValueError
-                                ):
-                                    pass
-
-                        break
-
-            except Exception:
-                continue
+            return False, {
+                "title": title,
+                "price": price,
+                "url": url,
+                "shop": "Smyths"
+            }
 
 
     # --------------------------------------------------
-    # ONLINE-VERFÜGBARKEIT
+    # Zweiter Versuch:
     #
-    # Wir suchen bewusst nur nach eindeutigen
-    # Online-Shop-Signalen.
+    # HTML nach js-stockStatusCode durchsuchen.
+    #
+    # Falls das Element z.B. per JavaScript-artigem
+    # Markup eingebettet ist.
+    # --------------------------------------------------
+
+    html_lower = html.lower()
+
+    if "js-stockstatuscode" in html_lower:
+
+        # inStock
+
+        if re.search(
+            r"js-stockstatuscode.{0,500}instock",
+            html_lower,
+            re.DOTALL
+        ):
+
+            return True, {
+                "title": title,
+                "price": price,
+                "url": url,
+                "shop": "Smyths"
+            }
+
+
+        # outOfStock
+
+        if re.search(
+            r"js-stockstatuscode.{0,500}outofstock",
+            html_lower,
+            re.DOTALL
+        ):
+
+            return False, {
+                "title": title,
+                "price": price,
+                "url": url,
+                "shop": "Smyths"
+            }
+
+
+    # --------------------------------------------------
+    # Dritter Versuch:
+    #
+    # Schema.org / JSON-LD availability
+    # --------------------------------------------------
+
+    for script in soup.find_all(
+        "script",
+        type="application/ld+json"
+    ):
+
+        try:
+
+            raw = script.string or script.get_text()
+
+            data = json.loads(raw)
+
+            candidates = []
+
+            if isinstance(data, dict):
+
+                candidates.append(data)
+
+                if "@graph" in data:
+
+                    candidates.extend(
+                        data["@graph"]
+                    )
+
+            elif isinstance(data, list):
+
+                candidates.extend(data)
+
+
+            for item in candidates:
+
+                if not isinstance(item, dict):
+                    continue
+
+
+                offers = item.get(
+                    "offers"
+                )
+
+                if isinstance(
+                    offers,
+                    dict
+                ):
+
+                    availability = str(
+                        offers.get(
+                            "availability",
+                            ""
+                        )
+                    ).lower()
+
+
+                    if (
+                        "instock"
+                        in availability
+                    ):
+
+                        return True, {
+                            "title": title,
+                            "price": price,
+                            "url": url,
+                            "shop": "Smyths"
+                        }
+
+
+                    if (
+                        "outofstock"
+                        in availability
+                        or "soldout"
+                        in availability
+                    ):
+
+                        return False, {
+                            "title": title,
+                            "price": price,
+                            "url": url,
+                            "shop": "Smyths"
+                        }
+
+        except Exception:
+            continue
+
+
+    # --------------------------------------------------
+    # Vierter Versuch:
+    #
+    # Nur eindeutige Online-Kaufsignale.
+    #
+    # Filialbestand wird NICHT berücksichtigt.
     # --------------------------------------------------
 
     text = soup.get_text(
@@ -314,19 +601,20 @@ def check_smyths(url):
     text_lower = text.lower()
 
 
-    # --------------------------------------------------
-    # Eindeutige "nicht verfügbar"-Signale
-    # --------------------------------------------------
+    # Eindeutige Online-Ausverkauft-Signale
 
     unavailable_patterns = [
+
         "online nicht verfügbar",
         "online nicht lieferbar",
         "nicht online verfügbar",
-        "derzeit nicht verfügbar",
-        "derzeit nicht lieferbar",
         "online ausverkauft",
-        "ausverkauft online"
+        "online out of stock",
+        "out of stock for home delivery",
+        "nicht verfügbar für lieferung",
+        "nicht verfügbar zur lieferung"
     ]
+
 
     for pattern in unavailable_patterns:
 
@@ -340,18 +628,19 @@ def check_smyths(url):
             }
 
 
-    # --------------------------------------------------
     # Eindeutige Online-Kaufsignale
-    # --------------------------------------------------
 
     available_patterns = [
+
         "in den warenkorb",
         "zum warenkorb",
         "online auf lager",
         "online lieferbar",
         "online verfügbar",
-        "lieferbar"
+        "auf lager für lieferung",
+        "lieferbar nach hause"
     ]
+
 
     for pattern in available_patterns:
 
@@ -366,16 +655,14 @@ def check_smyths(url):
 
 
     # --------------------------------------------------
-    # Wenn wir kein eindeutiges Signal finden:
-    # Fehler statt "out".
+    # Nichts Eindeutiges gefunden
     #
-    # Dadurch wird ein Website-Layout-Änderung nicht
-    # fälschlicherweise als "ausverkauft" gespeichert.
+    # NICHT als "out" werten!
     # --------------------------------------------------
 
     raise RuntimeError(
-        "Smyths: Keine eindeutige Information zur "
-        "Online-Verfügbarkeit gefunden."
+        "Smyths: Online-Verfügbarkeit konnte "
+        "nicht eindeutig ermittelt werden."
     )
 
 
@@ -386,6 +673,7 @@ def check_smyths(url):
 def check_stock(url):
 
     if is_smyths(url):
+
         return check_smyths(url)
 
     return check_diecast_hunter(url)
@@ -401,6 +689,7 @@ offset_text = read_file(
 )
 
 offset = int(offset_text)
+
 
 response = requests.get(
     f"https://api.telegram.org/bot{BOT_TOKEN}/getUpdates",
@@ -418,6 +707,7 @@ updates = response.json().get(
     []
 )
 
+
 status = read_file(
     STATUS_FILE,
     "active"
@@ -432,6 +722,7 @@ for update in updates:
     update_id = update["update_id"]
 
     offset = update_id + 1
+
 
     message = update.get(
         "message",
@@ -452,6 +743,7 @@ for update in updates:
     # Nur deinen eigenen Telegram-Chat akzeptieren
 
     if str(chat.get("id")) != str(CHAT_ID):
+
         continue
 
 
@@ -502,19 +794,24 @@ for update in updates:
             "🔗 ÜBERWACHTE URLs\n"
         ]
 
+
         for i, url in enumerate(
             urls,
             start=1
         ):
 
             if url:
+
                 message_lines.append(
                     f"{i}. 🟢 {url}"
                 )
+
             else:
+
                 message_lines.append(
                     f"{i}. ⚪ leer"
                 )
+
 
         message_lines.append(
             "\nÄndern mit:\n"
@@ -525,8 +822,11 @@ for update in updates:
             "/url1 leer"
         )
 
+
         send_telegram(
-            "\n".join(message_lines)
+            "\n".join(
+                message_lines
+            )
         )
 
 
@@ -542,13 +842,17 @@ for update in updates:
 
         command = text.split()[0]
 
+
         if command == "/url1":
+
             index = 0
 
         elif command == "/url2":
+
             index = 1
 
         else:
+
             index = 2
 
 
@@ -618,7 +922,7 @@ for update in updates:
             continue
 
 
-        # Neue URL speichern
+        # URL speichern
 
         urls[index] = new_url
 
@@ -626,6 +930,7 @@ for update in updates:
 
         write_urls(urls)
         write_stocks(stocks)
+
 
         send_telegram(
             f"✅ URL {index + 1} gespeichert.\n\n"
@@ -642,8 +947,11 @@ for update in updates:
     elif text == "/status":
 
         if status == "paused":
+
             status_text = "⏸️ pausiert"
+
         else:
+
             status_text = "▶️ aktiv"
 
 
@@ -693,15 +1001,9 @@ for update in updates:
                     )
 
 
-                shop_text = product.get(
-                    "shop",
-                    "Unbekannt"
-                )
-
-
                 status_lines.append(
                     f"{i}. {stock_text}\n"
-                    f"🏪 {shop_text}\n"
+                    f"🏪 {product.get('shop', 'Unbekannt')}\n"
                     f"{product['title']}"
                 )
 
@@ -722,7 +1024,9 @@ for update in updates:
 
 
         send_telegram(
-            "\n\n".join(status_lines)
+            "\n\n".join(
+                status_lines
+            )
         )
 
 
@@ -758,6 +1062,8 @@ stocks = read_stocks()
 
 
 for index, url in enumerate(urls):
+
+    # Leere URL überspringen
 
     if not url:
 
@@ -856,6 +1162,7 @@ for index, url in enumerate(urls):
 
             new_stock = "out"
 
+
             print(
                 f"Produkt {index + 1} "
                 "noch nicht verfügbar."
@@ -871,15 +1178,17 @@ for index, url in enumerate(urls):
             f"Fehler bei Produkt {index + 1}: {e}"
         )
 
-        # Bei einem technischen Fehler alten
-        # Bestand NICHT verändern.
+        # Ganz wichtig:
         #
-        # Dadurch wird z.B. ein 403 von Smyths
-        # nicht fälschlicherweise zu "out".
+        # Bei einem technischen Fehler wird der alte
+        # Status beibehalten.
+        #
+        # So wird beispielsweise ein 403 von Smyths
+        # NICHT als "out" gespeichert.
 
 
 # --------------------------------------------------
-# Bestandsstatus speichern
+# Aktuellen Bestand speichern
 # --------------------------------------------------
 
 write_stocks(
