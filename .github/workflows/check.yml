@@ -8,40 +8,63 @@ on:
 permissions:
   contents: write
 
-# Verhindert, dass zwei Läufe gleichzeitig
-# dieselben Dateien bearbeiten.
-concurrency:
-  group: hot-wheels-check
-  cancel-in-progress: false
-
 jobs:
   check-stock:
     runs-on: ubuntu-latest
 
     steps:
+
+      # --------------------------------------------------
+      # Repository herunterladen
+      # --------------------------------------------------
+
       - name: Repository herunterladen
         uses: actions/checkout@v5
+
+
+      # --------------------------------------------------
+      # Python einrichten
+      # --------------------------------------------------
 
       - name: Python einrichten
         uses: actions/setup-python@v6
         with:
           python-version: "3.x"
 
-      - name: Abhängigkeiten installieren
-        run: pip install requests beautifulsoup4
 
-      - name: Statusdateien vorbereiten
+      # --------------------------------------------------
+      # Python-Abhängigkeiten installieren
+      # --------------------------------------------------
+
+      - name: Abhängigkeiten installieren
         run: |
-          [ -f status.txt ] || echo "active" > status.txt
-          [ -f stock.txt ] || printf "unknown\nunknown\nunknown\n" > stock.txt
-          [ -f telegram_offset.txt ] || echo "0" > telegram_offset.txt
-          [ -f urls.txt ] || touch urls.txt
+          pip install requests playwright
+
+
+      # --------------------------------------------------
+      # Chromium für Playwright installieren
+      # --------------------------------------------------
+
+      - name: Chromium installieren
+        run: |
+          playwright install --with-deps chromium
+
+
+      # --------------------------------------------------
+      # Bestandsprüfung
+      # --------------------------------------------------
 
       - name: Bestandsprüfung
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: python checker.py
+        run: |
+          python checker.py
+
+
+      # --------------------------------------------------
+      # Status speichern
+      # --------------------------------------------------
 
       - name: Status speichern
         run: |
@@ -50,13 +73,6 @@ jobs:
 
           git add status.txt stock.txt telegram_offset.txt urls.txt
 
-          if git diff --cached --quiet; then
-            echo "Keine Änderungen vorhanden."
-            exit 0
-          fi
-
-          git commit -m "Update bot and stock status"
-
-          git pull --rebase origin main
+          git diff --cached --quiet || git commit -m "Update bot and stock status"
 
           git push
