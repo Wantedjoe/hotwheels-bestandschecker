@@ -1,5 +1,7 @@
 import os
+import re
 import requests
+from bs4 import BeautifulSoup
 
 BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
@@ -54,7 +56,6 @@ def read_urls():
     except FileNotFoundError:
         lines = []
 
-    # Genau 3 Plätze vorbereiten
     urls = lines[:3]
 
     while len(urls) < 3:
@@ -74,7 +75,7 @@ def write_urls(urls):
 
 
 # --------------------------------------------------
-# Bestandsstatus für 3 URLs lesen / schreiben
+# Bestandsstatus für 3 URLs
 # --------------------------------------------------
 
 def read_stocks():
@@ -103,10 +104,19 @@ def write_stocks(stocks):
 
 
 # --------------------------------------------------
-# Produkt prüfen
+# Shop erkennen
 # --------------------------------------------------
 
-def check_stock(url):
+def is_smyths(url):
+    return "smythstoys.com" in url.lower()
+
+
+# --------------------------------------------------
+# Diecast Hunter prüfen
+# --------------------------------------------------
+
+def check_diecast_hunter(url):
+
     response = requests.get(
         url + ".js",
         headers={"User-Agent": "Mozilla/5.0"},
@@ -122,14 +132,274 @@ def check_stock(url):
         for variant in product["variants"]
     )
 
-    return in_stock, product
+    return in_stock, {
+        "title": product.get("title", "Unbekanntes Produkt"),
+        "price": product.get("price", 0),
+        "url": url,
+        "shop": "Diecast Hunter"
+    }
+
+
+# --------------------------------------------------
+# Smyths prüfen
+#
+# WICHTIG:
+# Hier wird ausschließlich Online-Bestellbarkeit
+# berücksichtigt.
+#
+# Filialbestand / Click & Collect wird NICHT
+# als "verfügbar" gewertet.
+# --------------------------------------------------
+
+def check_smyths(url):
+
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 "
+            "(KHTML, like Gecko) "
+            "Chrome/140.0.0.0 Safari/537.36"
+        ),
+        "Accept": (
+            "text/html,application/xhtml+xml,"
+            "application/xml;q=0.9,image/avif,"
+            "image/webp,*/*;q=0.8"
+        ),
+        "Accept-Language": "de-CH,de;q=0.9,en;q=0.8",
+        "Referer": "https://www.smythstoys.com/ch/de-ch/"
+    }
+
+    response = requests.get(
+        url,
+        headers=headers,
+        timeout=20
+    )
+
+    response.raise_for_status()
+
+    html = response.text
+
+    soup = BeautifulSoup(html, "html.parser")
+
+    # --------------------------------------------------
+    # Produktname ermitteln
+    # --------------------------------------------------
+
+    title = None
+
+    meta_title = soup.find(
+        "meta",
+        property="og:title"
+    )
+
+    if meta_title:
+        title = meta_title.get("content")
+
+    if not title:
+        title_tag = soup.find("title")
+
+        if title_tag:
+            title = title_tag.get_text(
+                " ",
+                strip=True
+            )
+
+    if not title:
+        title = "Smyths Produkt"
+
+
+    # --------------------------------------------------
+    # Preis ermitteln
+    # --------------------------------------------------
+
+    price = None
+
+    meta_price = soup.find(
+        "meta",
+        property="product:price:amount"
+    )
+
+    if meta_price:
+        try:
+            price = float(
+                meta_price.get("content")
+            )
+        except (TypeError, ValueError):
+            pass
+
+
+    # --------------------------------------------------
+    # JSON-LD Produktdaten versuchen
+    # --------------------------------------------------
+
+    if price is None:
+
+        for script in soup.find_all(
+            "script",
+            type="application/ld+json"
+        ):
+
+            try:
+                import json
+
+                data = json.loads(
+                    script.string or
+                    script.get_text()
+                )
+
+                candidates = []
+
+                if isinstance(data, dict):
+                    candidates.append(data)
+
+                    if "@graph" in data:
+                        candidates.extend(
+                            data["@graph"]
+                        )
+
+                elif isinstance(data, list):
+                    candidates.extend(data)
+
+                for item in candidates:
+
+                    if not isinstance(item, dict):
+                        continue
+
+                    if item.get("@type") == "Product":
+
+                        if not title and item.get("name"):
+                            title = item["name"]
+
+                        offers = item.get(
+                            "offers"
+                        )
+
+                        if isinstance(
+                            offers,
+                            dict
+                        ):
+                            value = offers.get(
+                                "price"
+                            )
+
+                            if value is not None:
+                                try:
+                                    price = float(
+                                        value
+                                    )
+                                except (
+                                    TypeError,
+                                    ValueError
+                                ):
+                                    pass
+
+                        break
+
+            except Exception:
+                continue
+
+
+    # --------------------------------------------------
+    # ONLINE-VERFÜGBARKEIT
+    #
+    # Wir suchen bewusst nur nach eindeutigen
+    # Online-Shop-Signalen.
+    # --------------------------------------------------
+
+    text = soup.get_text(
+        " ",
+        strip=True
+    )
+
+    text_lower = text.lower()
+
+
+    # --------------------------------------------------
+    # Eindeutige "nicht verfügbar"-Signale
+    # --------------------------------------------------
+
+    unavailable_patterns = [
+        "online nicht verfügbar",
+        "online nicht lieferbar",
+        "nicht online verfügbar",
+        "derzeit nicht verfügbar",
+        "derzeit nicht lieferbar",
+        "online ausverkauft",
+        "ausverkauft online"
+    ]
+
+    for pattern in unavailable_patterns:
+
+        if pattern in text_lower:
+
+            return False, {
+                "title": title,
+                "price": price,
+                "url": url,
+                "shop": "Smyths"
+            }
+
+
+    # --------------------------------------------------
+    # Eindeutige Online-Kaufsignale
+    # --------------------------------------------------
+
+    available_patterns = [
+        "in den warenkorb",
+        "zum warenkorb",
+        "online auf lager",
+        "online lieferbar",
+        "online verfügbar",
+        "lieferbar"
+    ]
+
+    for pattern in available_patterns:
+
+        if pattern in text_lower:
+
+            return True, {
+                "title": title,
+                "price": price,
+                "url": url,
+                "shop": "Smyths"
+            }
+
+
+    # --------------------------------------------------
+    # Wenn wir kein eindeutiges Signal finden:
+    # Fehler statt "out".
+    #
+    # Dadurch wird ein Website-Layout-Änderung nicht
+    # fälschlicherweise als "ausverkauft" gespeichert.
+    # --------------------------------------------------
+
+    raise RuntimeError(
+        "Smyths: Keine eindeutige Information zur "
+        "Online-Verfügbarkeit gefunden."
+    )
+
+
+# --------------------------------------------------
+# Einheitliche Produktprüfung
+# --------------------------------------------------
+
+def check_stock(url):
+
+    if is_smyths(url):
+        return check_smyths(url)
+
+    return check_diecast_hunter(url)
 
 
 # --------------------------------------------------
 # Telegram-Befehle abholen
 # --------------------------------------------------
 
-offset_text = read_file(OFFSET_FILE, "0")
+offset_text = read_file(
+    OFFSET_FILE,
+    "0"
+)
+
 offset = int(offset_text)
 
 response = requests.get(
@@ -143,9 +413,15 @@ response = requests.get(
 
 response.raise_for_status()
 
-updates = response.json().get("result", [])
+updates = response.json().get(
+    "result",
+    []
+)
 
-status = read_file(STATUS_FILE, "active")
+status = read_file(
+    STATUS_FILE,
+    "active"
+)
 
 urls = read_urls()
 stocks = read_stocks()
@@ -155,14 +431,26 @@ for update in updates:
 
     update_id = update["update_id"]
 
-    # Offset auf nächsten Update setzen
     offset = update_id + 1
 
-    message = update.get("message", {})
-    chat = message.get("chat", {})
-    text = message.get("text", "").strip()
+    message = update.get(
+        "message",
+        {}
+    )
+
+    chat = message.get(
+        "chat",
+        {}
+    )
+
+    text = message.get(
+        "text",
+        ""
+    ).strip()
+
 
     # Nur deinen eigenen Telegram-Chat akzeptieren
+
     if str(chat.get("id")) != str(CHAT_ID):
         continue
 
@@ -174,7 +462,11 @@ for update in updates:
     if text == "/pause":
 
         status = "paused"
-        write_file(STATUS_FILE, status)
+
+        write_file(
+            STATUS_FILE,
+            status
+        )
 
         send_telegram(
             "⏸️ Bestandscheck pausiert.\n\n"
@@ -189,7 +481,11 @@ for update in updates:
     elif text == "/start":
 
         status = "active"
-        write_file(STATUS_FILE, status)
+
+        write_file(
+            STATUS_FILE,
+            status
+        )
 
         send_telegram(
             "▶️ Bestandscheck wieder aktiviert."
@@ -198,7 +494,6 @@ for update in updates:
 
     # --------------------------------------------------
     # /url
-    # Aktuelle URLs anzeigen
     # --------------------------------------------------
 
     elif text == "/url":
@@ -207,7 +502,10 @@ for update in updates:
             "🔗 ÜBERWACHTE URLs\n"
         ]
 
-        for i, url in enumerate(urls, start=1):
+        for i, url in enumerate(
+            urls,
+            start=1
+        ):
 
             if url:
                 message_lines.append(
@@ -227,53 +525,72 @@ for update in updates:
             "/url1 leer"
         )
 
-        send_telegram("\n".join(message_lines))
+        send_telegram(
+            "\n".join(message_lines)
+        )
 
 
     # --------------------------------------------------
-    # /url1
-    # /url2
-    # /url3
+    # /url1 /url2 /url3
     # --------------------------------------------------
 
-    elif text.startswith("/url1") or \
-         text.startswith("/url2") or \
-         text.startswith("/url3"):
+    elif (
+        text.startswith("/url1")
+        or text.startswith("/url2")
+        or text.startswith("/url3")
+    ):
 
         command = text.split()[0]
 
         if command == "/url1":
             index = 0
+
         elif command == "/url2":
             index = 1
+
         else:
             index = 2
 
-        parts = text.split(maxsplit=1)
 
-        # Nur /url1 ohne URL:
+        parts = text.split(
+            maxsplit=1
+        )
+
+
+        # Nur /url1 ohne URL
+
         if len(parts) == 1:
 
             if urls[index]:
+
                 send_telegram(
                     f"🔗 URL {index + 1}:\n\n"
                     f"{urls[index]}"
                 )
+
             else:
+
                 send_telegram(
                     f"🔗 URL {index + 1} ist leer."
                 )
 
             continue
 
+
         new_url = parts[1].strip()
 
+
         # URL löschen
-        if new_url.lower() in ["leer", "clear", "delete", "löschen"]:
+
+        if new_url.lower() in [
+            "leer",
+            "clear",
+            "delete",
+            "löschen"
+        ]:
 
             urls[index] = ""
 
-            # Alten Bestand zurücksetzen
             stocks[index] = "unknown"
 
             write_urls(urls)
@@ -285,7 +602,9 @@ for update in updates:
 
             continue
 
-        # Einfache URL-Prüfung
+
+        # URL prüfen
+
         if not (
             new_url.startswith("https://")
             or new_url.startswith("http://")
@@ -293,19 +612,16 @@ for update in updates:
 
             send_telegram(
                 "⚠️ Ungültige URL.\n\n"
-                "Bitte eine vollständige URL senden, "
-                "z. B.:\n"
-                "/url1 https://example.com/produkt"
+                "Bitte eine vollständige URL senden."
             )
 
             continue
 
+
         # Neue URL speichern
+
         urls[index] = new_url
 
-        # Wichtig:
-        # Alten Bestandsstatus zurücksetzen,
-        # damit kein falscher Restock-Alarm entsteht.
         stocks[index] = "unknown"
 
         write_urls(urls)
@@ -320,7 +636,7 @@ for update in updates:
 
 
     # --------------------------------------------------
-    # /status – LIVE-Abfrage aller Produkte
+    # /status
     # --------------------------------------------------
 
     elif text == "/status":
@@ -330,36 +646,65 @@ for update in updates:
         else:
             status_text = "▶️ aktiv"
 
+
         status_lines = [
             "ℹ️ LIVE-STATUS\n",
             f"Bestandscheck: {status_text}\n"
         ]
 
+
         found_url = False
 
-        for i, url in enumerate(urls, start=1):
+
+        for i, url in enumerate(
+            urls,
+            start=1
+        ):
 
             if not url:
+
                 status_lines.append(
                     f"{i}. ⚪ kein Produkt"
                 )
+
                 continue
+
 
             found_url = True
 
+
             try:
 
-                in_stock, product = check_stock(url)
+                in_stock, product = check_stock(
+                    url
+                )
+
 
                 if in_stock:
-                    stock_text = "🟢 VERFÜGBAR"
+
+                    stock_text = (
+                        "🟢 VERFÜGBAR"
+                    )
+
                 else:
-                    stock_text = "🔴 NICHT VERFÜGBAR"
+
+                    stock_text = (
+                        "🔴 NICHT VERFÜGBAR"
+                    )
+
+
+                shop_text = product.get(
+                    "shop",
+                    "Unbekannt"
+                )
+
 
                 status_lines.append(
                     f"{i}. {stock_text}\n"
+                    f"🏪 {shop_text}\n"
                     f"{product['title']}"
                 )
+
 
             except Exception as e:
 
@@ -368,10 +713,13 @@ for update in updates:
                     f"{str(e)}"
                 )
 
+
         if not found_url:
+
             status_lines.append(
                 "\nKeine URLs eingerichtet."
             )
+
 
         send_telegram(
             "\n\n".join(status_lines)
@@ -382,34 +730,43 @@ for update in updates:
 # Offset speichern
 # --------------------------------------------------
 
-write_file(OFFSET_FILE, str(offset))
+write_file(
+    OFFSET_FILE,
+    str(offset)
+)
 
 
 # --------------------------------------------------
-# Bei Pause keinen normalen Bestandscheck durchführen
+# Bei Pause keinen normalen Bestandscheck
 # --------------------------------------------------
 
 if status == "paused":
 
-    print("Bestandscheck ist pausiert.")
+    print(
+        "Bestandscheck ist pausiert."
+    )
+
     exit()
 
 
 # --------------------------------------------------
-# Normalen Bestandscheck für bis zu 3 URLs durchführen
+# Normalen Bestandscheck durchführen
 # --------------------------------------------------
 
 urls = read_urls()
 stocks = read_stocks()
 
+
 for index, url in enumerate(urls):
 
-    # Leere URL überspringen
     if not url:
+
         print(
             f"URL {index + 1}: leer – übersprungen."
         )
+
         continue
+
 
     try:
 
@@ -417,38 +774,71 @@ for index, url in enumerate(urls):
             f"Prüfe URL {index + 1}: {url}"
         )
 
-        in_stock, product = check_stock(url)
+
+        in_stock, product = check_stock(
+            url
+        )
+
 
         old_stock = stocks[index]
 
 
         # --------------------------------------------------
-        # Produkt verfügbar
+        # Verfügbar
         # --------------------------------------------------
 
         if in_stock:
 
             new_stock = "in"
 
-            # Nur bei echter Wiederverfügbarkeit alarmieren
+
+            # Nur echter Restock
+
             if old_stock == "out":
+
+                price = product.get(
+                    "price"
+                )
+
+
+                if isinstance(
+                    price,
+                    (int, float)
+                ):
+
+                    price_text = (
+                        f"{price:.2f}"
+                    )
+
+                else:
+
+                    price_text = (
+                        "Preis nicht verfügbar"
+                    )
+
 
                 message = (
                     "🚨 HOT WHEELS ALARM! 🚨\n\n"
-                    f"Produkt {index + 1}\n\n"
+                    f"Produkt {index + 1}\n"
+                    f"🏪 {product.get('shop', 'Shop')}\n\n"
                     f"{product['title']}\n\n"
-                    f"💰 Preis: "
-                    f"{product['price'] / 100:.2f} €\n\n"
+                    f"💰 Preis: {price_text}\n\n"
                     f"👉 Jetzt prüfen und kaufen:\n"
                     f"{url}"
                 )
 
-                send_telegram(message)
+
+                send_telegram(
+                    message
+                )
+
 
                 print(
-                    f"Produkt {index + 1} wieder verfügbar – "
-                    "Telegram-Nachricht gesendet!"
+                    f"Produkt {index + 1} wieder "
+                    "verfügbar – Telegram-Nachricht "
+                    "gesendet!"
                 )
+
 
             else:
 
@@ -459,7 +849,7 @@ for index, url in enumerate(urls):
 
 
         # --------------------------------------------------
-        # Produkt nicht verfügbar
+        # Nicht verfügbar
         # --------------------------------------------------
 
         else:
@@ -467,12 +857,13 @@ for index, url in enumerate(urls):
             new_stock = "out"
 
             print(
-                f"Produkt {index + 1} noch nicht verfügbar."
+                f"Produkt {index + 1} "
+                "noch nicht verfügbar."
             )
 
 
-        # Status speichern
         stocks[index] = new_stock
+
 
     except Exception as e:
 
@@ -480,15 +871,21 @@ for index, url in enumerate(urls):
             f"Fehler bei Produkt {index + 1}: {e}"
         )
 
-        # Alten Status bei einem Fehler behalten.
-        # Dadurch wird ein vorübergehender Fehler
-        # nicht fälschlicherweise als "out" gewertet.
+        # Bei einem technischen Fehler alten
+        # Bestand NICHT verändern.
+        #
+        # Dadurch wird z.B. ein 403 von Smyths
+        # nicht fälschlicherweise zu "out".
 
 
 # --------------------------------------------------
-# Aktuellen Bestand für alle 3 URLs speichern
+# Bestandsstatus speichern
 # --------------------------------------------------
 
-write_stocks(stocks)
+write_stocks(
+    stocks
+)
 
-print("Bestandsprüfung abgeschlossen.")
+print(
+    "Bestandsprüfung abgeschlossen."
+)
